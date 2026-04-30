@@ -1,0 +1,255 @@
+import { Button, VerticalBox, HorizontalBox, ScrollView, StandardListView, LineEdit } from "std-widgets.slint";
+
+export struct SysctlEntry {
+    name: string,
+    value: string,
+}
+
+export struct ServiceEntry {
+    name: string,
+    running: bool,
+    enabled: bool,
+}
+
+export struct PackageEntry {
+    name: string,
+    version: string,
+    comment: string,
+}
+
+export component AppWindow inherits Window {
+    title: "Torbalan - FreeBSD System Manager";
+    preferred-width: 1000px;
+    preferred-height: 800px;
+    background: #ffffff; // Pure white background
+    default-font-family: "sans-serif";
+    default-font-size: 14px;
+
+    callback login(string, string);
+    callback change-page(string);
+    callback service-action(string, string);
+
+    in property <bool> logged-in: false;
+    in property <string> active-page: "sysctl";
+    in property <bool> loading: false;
+    
+    in property <[SysctlEntry]> sysctls: [];
+    in property <[ServiceEntry]> services: [];
+    in property <[PackageEntry]> packages: [];
+
+    HorizontalBox {
+        padding: 0;
+        spacing: 0;
+
+        // Sidebar
+        if (logged-in) : Rectangle {
+            width: 250px;
+            background: #000000; // Pure black sidebar
+            
+            VerticalBox {
+                alignment: start;
+                padding: 10px;
+                spacing: 20px;
+
+                Image {
+                    source: @image-url("imgs/torbalan.png");
+                    width: 230px; // Fill sidebar width
+                    height: 230px;
+                    image-fit: contain;
+                    horizontal-alignment: center;
+                }
+
+                Text {
+                    text: "TORBALAN";
+                    font-size: 28px;
+                    font-weight: 900;
+                    color: #ffffff; // Pure white text
+                    horizontal-alignment: center;
+                }
+
+                Rectangle { height: 20px; }
+
+                Button {
+                    text: "Sysctl";
+                    icon: @image-url("icons/sysctl.svg");
+                    clicked => { root.change-page("sysctl") }
+                }
+                Button {
+                    text: "Services";
+                    icon: @image-url("icons/service.svg");
+                    clicked => { root.change-page("services") }
+                }
+                Button {
+                    text: "Packages";
+                    icon: @image-url("icons/package.svg");
+                    clicked => { root.change-page("packages") }
+                }
+
+                if (root.loading) : VerticalBox {
+                    alignment: end;
+                    Rectangle { height: 4px; background: #00ff00; }
+                    Text { text: "SYNCING..."; color: #00ff00; font-size: 16px; font-weight: 900; horizontal-alignment: center; }
+                }
+            }
+        }
+
+        // Main Content
+        Rectangle {
+            background: #ffffff; // Pure white main area
+
+            if (!logged-in) : VerticalBox {
+                alignment: center;
+                spacing: 40px;
+                padding: 40px;
+
+                Image {
+                    source: @image-url("imgs/torbalan.png");
+                    width: 450px; // Huge logo on login
+                    height: 450px;
+                    image-fit: contain;
+                    horizontal-alignment: center;
+                }
+
+                Text {
+                    text: "TORBALAN";
+                    font-size: 60px;
+                    font-weight: 900;
+                    horizontal-alignment: center;
+                    color: #000000; // Pure black text
+                }
+
+                Text {
+                    text: "FREEBSD SYSTEM ADMINISTRATION";
+                    font-size: 20px;
+                    font-weight: 800;
+                    horizontal-alignment: center;
+                    color: #000000;
+                }
+
+                user_input := LineEdit {
+                    placeholder-text: "Username";
+                    height: 60px;
+                    font-size: 24px;
+                }
+                pass_input := LineEdit {
+                    placeholder-text: "Password";
+                    input-type: password;
+                    height: 60px;
+                    font-size: 24px;
+                }
+
+                Button {
+                    text: "AUTHENTICATE";
+                    primary: true;
+                    height: 70px;
+                    clicked => { root.login(user_input.text, pass_input.text) }
+                }
+            }
+
+            if (logged-in) : VerticalBox {
+                padding: 30px;
+                spacing: 25px;
+                
+                HorizontalBox {
+                    alignment: start;
+                    Text {
+                        text: root.active-page == "sysctl" ? "KERNEL PARAMETERS" :
+                            root.active-page == "services" ? "SYSTEM SERVICES" :
+                            "PACKAGE MANAGER";
+                        font-size: 36px;
+                        font-weight: 900;
+                        color: #000000;
+                    }
+                }
+
+                Rectangle {
+                    background: #f0f0f0; // Light grey for content area
+                    border-radius: 8px;
+                    padding: 10px;
+
+                    if (root.active-page == "sysctl") : ScrollView {
+                        VerticalBox {
+                            alignment: start;
+                            padding: 20px;
+                            for entry in root.sysctls : HorizontalBox {
+                                padding-bottom: 10px;
+                                Text { text: entry.name; width: 400px; font-weight: 900; color: #000000; font-size: 18px; }
+                                Text { text: entry.value; color: #0000ff; font-family: "monospace"; font-size: 18px; font-weight: 900; }
+                            }
+                        }
+                    }
+
+                    if (root.active-page == "services") : ScrollView {
+                        VerticalBox {
+                            alignment: start;
+                            padding: 15px;
+                            spacing: 15px;
+                            for entry in root.services : Rectangle {
+                                height: 70px;
+                                background: #ffffff;
+                                border-radius: 8px;
+                                border-width: 2px;
+                                border-color: #000000;
+                                HorizontalBox {
+                                    padding: 15px;
+                                    Text { text: entry.name; vertical-alignment: center; font-weight: 900; width: 300px; color: #000000; font-size: 20px; }
+                                    
+                                    Rectangle {
+                                        width: 140px;
+                                        height: 34px;
+                                        background: entry.running ? #008000 : #ff0000;
+                                        border-radius: 17px;
+                                        Text { 
+                                            text: entry.running ? "RUNNING" : "STOPPED";
+                                            color: #ffffff;
+                                            font-size: 14px;
+                                            font-weight: 900;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+
+                                    Rectangle { width: 30px; }
+
+                                    Button {
+                                        text: entry.running ? "Stop" : "Start";
+                                        width: 120px;
+                                        clicked => { root.service-action(entry.name, entry.running ? "stop" : "start") }
+                                    }
+                                    Button {
+                                        text: entry.enabled ? "Disable" : "Enable";
+                                        width: 120px;
+                                        clicked => { root.service-action(entry.name, entry.enabled ? "disable" : "enable") }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if (root.active-page == "packages") : ScrollView {
+                        VerticalBox {
+                            alignment: start;
+                            padding: 15px;
+                            spacing: 15px;
+                            for entry in root.packages : Rectangle {
+                                height: 90px;
+                                background: #ffffff;
+                                border-radius: 8px;
+                                border-width: 2px;
+                                border-color: #000000;
+                                VerticalBox {
+                                    padding: 15px;
+                                    HorizontalBox {
+                                        Text { text: entry.name; font-weight: 900; color: #000000; font-size: 22px; }
+                                        Text { text: entry.version; color: #000000; horizontal-alignment: end; font-size: 18px; font-weight: 900; }
+                                    }
+                                    Text { text: entry.comment; font-size: 16px; color: #000000; overflow: elide; font-weight: 700; }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
