@@ -3,7 +3,7 @@ use pam::Authenticator;
 pub fn authenticate(username: &str, password: &str) -> bool {
     // On FreeBSD, "login" or "system" are standard PAM services.
     // "login" is often more appropriate for user-facing authentication.
-    let mut auth = match Authenticator::with_password("login") {
+    let mut auth = match Authenticator::with_password("system") {
         Ok(a) => a,
         Err(e) => {
             eprintln!("Failed to initialize PAM authenticator: {:?}", e);

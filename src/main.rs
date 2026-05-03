@@ -5,27 +5,21 @@ mod sysctl;
 mod service;
 mod pkg;
 
-use slint::{ModelRc, VecModel, SharedString, Weak};
+use slint::{Model, ModelRc, VecModel, SharedString, Weak};
 use std::rc::Rc;
-use tokio::runtime::Runtime;
 
 fn main() -> Result<(), slint::PlatformError> {
-    std::env::set_var("SLINT_BACKEND", "software");
     let ui = AppWindow::new()?;
-    let rt = Runtime::new().unwrap();
 
+    // ── Login ────────────────────────────────────────────────────────────────
     let ui_handle = ui.as_weak();
     ui.on_login(move |username, password| {
         let ui = ui_handle.unwrap();
         if auth::authenticate(&username, &password) {
-            println!("Login successful for user: {}", username);
             ui.set_logged_in(true);
-            
-            // Trigger initial data load
-            let ui_weak = ui.as_weak();
-            load_page_data_async(ui_weak, "sysctl");
+            load_page_data_async(ui.as_weak(), "sysctl");
         } else {
-            println!("Login failed for user: {}", username);
+            eprintln!("Login failed for user: {}", username);
         }
     });
 
@@ -36,104 +30,233 @@ fn main() -> Result<(), slint::PlatformError> {
         load_page_data_async(ui.as_weak(), &page);
     });
 
+    // ── Service actions ───────────────
     let ui_handle = ui.as_weak();
     ui.on_service_action(move |name, action| {
         let ui = ui_handle.unwrap();
+        ui.set_loading(true);
         let ui_weak = ui.as_weak();
         let name_str = name.to_string();
         let action_str = action.to_string();
-        
-        ui.set_loading(true);
         std::thread::spawn(move || {
-            if service::manage_service(&name_str, &action_str) {
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(ui) = ui_weak.upgrade() {
-                        load_page_data_async(ui.as_weak(), "services");
-                    }
-                });
+            service::manage_service(&name_str, &action_str);
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = ui_weak.upgrade() {
+                    load_page_data_async(ui.as_weak(), "services");
+                }
+            });
+        });
+    });
+
+    // ── Toggle mark (main-thread: access model via ui) ─────────────────────
+    let ui_handle = ui.as_weak();
+    ui.on_toggle_package_mark(move |name| {
+        let ui = match ui_handle.upgrade() { Some(u) => u, None => return };
+        let model = ui.get_packages();
+        let updated: Vec<PackageEntry> = (0..model.row_count())
+            .filter_map(|i| model.row_data(i))
+            .map(|mut e| {
+                if e.name == name { e.marked = !e.marked; }
+                e
+            })
+            .collect();
+        let count = updated.iter().filter(|e| e.marked).count();
+        ui.set_packages(ModelRc::from(Rc::new(VecModel::from(updated))));
+        ui.set_marked_count(count as i32);
+    });
+
+    // ── Per-row install ─────────────────
+    let ui_handle = ui.as_weak();
+    ui.on_install_package(move |name| {
+        if let Some(ui) = ui_handle.upgrade() { ui.set_loading(true); }
+        let ui_weak = ui_handle.clone();
+        let name_str = name.to_string();
+        std::thread::spawn(move || {
+            pkg::install(&name_str);
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = ui_weak.upgrade() {
+                    load_page_data_async(ui.as_weak(), "packages");
+                }
+            });
+        });
+    });
+
+    // ── remove Per-row ─────────────────────────────────────
+    let ui_handle = ui.as_weak();
+    ui.on_remove_package(move |name| {
+        if let Some(ui) = ui_handle.upgrade() { ui.set_loading(true); }
+        let ui_weak = ui_handle.clone();
+        let name_str = name.to_string();
+        std::thread::spawn(move || {
+            pkg::remove(&name_str);
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = ui_weak.upgrade() {
+                    load_page_data_async(ui.as_weak(), "packages");
+                }
+            });
+        });
+    });
+
+    // ── Batch remove ──────────────────────────────────────────────────────────
+    let ui_handle = ui.as_weak();
+    ui.on_remove_marked(move || {
+        let ui = match ui_handle.upgrade() { Some(u) => u, None => return };
+        let model = ui.get_packages();
+        let names: Vec<String> = (0..model.row_count())
+            .filter_map(|i| model.row_data(i))
+            .filter(|e| e.marked && e.is_installed)
+            .map(|e| e.name.to_string())
+            .collect();
+        if names.is_empty() { return; }
+        ui.set_loading(true);
+        let ui_weak = ui_handle.clone();
+        std::thread::spawn(move || {
+            for name in &names { pkg::remove(name); }
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = ui_weak.upgrade() {
+                    load_page_data_async(ui.as_weak(), "packages");
+                }
+            });
+        });
+    });
+
+    // ── install Batch ──────────────────────────────
+    let ui_handle = ui.as_weak();
+    ui.on_install_marked(move || {
+        let ui = match ui_handle.upgrade() { Some(u) => u, None => return };
+        let model = ui.get_packages();
+        let names: Vec<String> = (0..model.row_count())
+            .filter_map(|i| model.row_data(i))
+            .filter(|e| e.marked && !e.is_installed)
+            .map(|e| e.name.to_string())
+            .collect();
+        if names.is_empty() { return; }
+        ui.set_loading(true);
+        let ui_weak = ui_handle.clone();
+        std::thread::spawn(move || {
+            for name in &names { pkg::install(name); }
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = ui_weak.upgrade() {
+                    load_page_data_async(ui.as_weak(), "packages");
+                }
+            });
+        });
+    });
+
+    // ── Search / filter ───────────────────────────────────────────────────────
+    let ui_handle = ui.as_weak();
+    ui.on_search_packages(move |query| {
+        let query_str = query.to_string().to_lowercase();
+        let ui_weak = ui_handle.clone();
+        if let Some(ui) = ui_weak.upgrade() { ui.set_loading(true); }
+        std::thread::spawn(move || {
+            let installed = pkg::list_installed();
+            let catalog = if query_str.is_empty() {
+                Vec::new()
             } else {
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(ui) = ui_weak.upgrade() {
-                        ui.set_loading(false);
-                    }
+                pkg::search_catalog(&query_str)
+            };
+            let mut entries = make_slint_entries(installed, catalog);
+            if !query_str.is_empty() {
+                entries.retain(|e| {
+                    e.name.to_lowercase().contains(&query_str)
+                        || e.comment.to_lowercase().contains(&query_str)
                 });
             }
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = ui_weak.upgrade() {
+                    ui.set_packages(ModelRc::from(Rc::new(VecModel::from(entries))));
+                    ui.set_marked_count(0);
+                    ui.set_loading(false);
+                }
+            });
         });
     });
 
     ui.run()
 }
 
+
+fn make_slint_entries(
+    installed: Vec<pkg::PackageEntry>,
+    catalog: Vec<pkg::PackageEntry>,
+) -> Vec<PackageEntry> {
+    let mut entries: Vec<PackageEntry> = installed
+        .into_iter()
+        .map(|p| PackageEntry {
+            name: SharedString::from(p.name),
+            version: SharedString::from(p.version),
+            comment: SharedString::from(p.comment),
+            is_installed: true,
+            marked: false,
+        })
+        .collect();
+    for p in catalog {
+        entries.push(PackageEntry {
+            name: SharedString::from(p.name),
+            version: SharedString::from(p.version),
+            comment: SharedString::from(p.comment),
+            is_installed: false,
+            marked: false,
+        });
+    }
+    entries
+}
+
 fn load_page_data_async(ui_weak: Weak<AppWindow>, page: &str) {
     let page_str = page.to_string();
-    
+
     if let Some(ui) = ui_weak.upgrade() {
         ui.set_loading(true);
     }
 
-    std::thread::spawn(move || {
-        match page_str.as_str() {
-            "sysctl" => {
-                let names = sysctl::list_sysctls("vfs.");
-                let entries: Vec<SysctlEntry> = names.into_iter().take(100).map(|name| {
-                    let value = sysctl::get_sysctl_value(&name).unwrap_or_else(|| "N/A".to_string());
-                    SysctlEntry {
-                        name: SharedString::from(name),
-                        value: SharedString::from(value),
-                    }
-                }).collect();
-                
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(ui) = ui_weak.upgrade() {
-                        let model = Rc::new(VecModel::from(entries));
-                        ui.set_sysctls(ModelRc::from(model));
-                        ui.set_loading(false);
-                    }
-                });
-            }
-            "services" => {
-                let services = service::list_services();
-                let entries: Vec<ServiceEntry> = services.into_iter().take(100).map(|s| {
-                    ServiceEntry {
-                        name: SharedString::from(s.name),
-                        running: s.running,
-                        enabled: s.enabled,
-                    }
-                }).collect();
-                
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(ui) = ui_weak.upgrade() {
-                        let model = Rc::new(VecModel::from(entries));
-                        ui.set_services(ModelRc::from(model));
-                        ui.set_loading(false);
-                    }
-                });
-            }
-            "packages" => {
-                let packages = pkg::list_installed();
-                let entries: Vec<PackageEntry> = packages.into_iter().take(100).map(|p| {
-                    PackageEntry {
-                        name: SharedString::from(p.name),
-                        version: SharedString::from(p.version),
-                        comment: SharedString::from(p.comment),
-                    }
-                }).collect();
-                
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(ui) = ui_weak.upgrade() {
-                        let model = Rc::new(VecModel::from(entries));
-                        ui.set_packages(ModelRc::from(model));
-                        ui.set_loading(false);
-                    }
-                });
-            }
-            _ => {
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(ui) = ui_weak.upgrade() {
-                        ui.set_loading(false);
-                    }
-                });
-            }
+    std::thread::spawn(move || match page_str.as_str() {
+        "sysctl" => {
+            let entries: Vec<SysctlEntry> = sysctl::list_sysctl_entries("vfs")
+                .into_iter()
+                .take(200)
+                .map(|(name, value)| SysctlEntry {
+                    name: SharedString::from(name),
+                    value: SharedString::from(value),
+                })
+                .collect();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = ui_weak.upgrade() {
+                    ui.set_sysctls(ModelRc::from(Rc::new(VecModel::from(entries))));
+                    ui.set_loading(false);
+                }
+            });
+        }
+        "services" => {
+            let entries: Vec<ServiceEntry> = service::list_services()
+                .into_iter()
+                .map(|s| ServiceEntry {
+                    name: SharedString::from(s.name),
+                    running: s.running,
+                    enabled: s.enabled,
+                })
+                .collect();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = ui_weak.upgrade() {
+                    ui.set_services(ModelRc::from(Rc::new(VecModel::from(entries))));
+                    ui.set_loading(false);
+                }
+            });
+        }
+        "packages" => {
+            let entries = make_slint_entries(pkg::list_installed(), Vec::new());
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = ui_weak.upgrade() {
+                    ui.set_packages(ModelRc::from(Rc::new(VecModel::from(entries))));
+                    ui.set_marked_count(0);
+                    ui.set_loading(false);
+                }
+            });
+        }
+        _ => {
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = ui_weak.upgrade() { ui.set_loading(false); }
+            });
         }
     });
 }
