@@ -11,6 +11,37 @@ pub struct ServiceInfo {
     pub description: String,
 }
 
+fn running_process_names() -> HashSet<String> {
+    let out = Command::new("/bin/ps")
+        .args(["-ax", "-o", "comm="])
+        .output()
+        .ok();
+    out.map(|o| {
+        String::from_utf8_lossy(&o.stdout)
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect()
+    })
+    .unwrap_or_default()
+}
+
+fn is_running(name: &str, procs: &HashSet<String>) -> bool {
+    // Exact match
+    if procs.contains(name) {
+        return true;
+    }
+    // Hyphenated daemon variant: "dbus" → "dbus-daemon", "dbus-launch"
+    if procs.iter().any(|p| p.starts_with(&format!("{}-", name))) {
+        return true;
+    }
+    // "-d" suffix variant: "cron" → "crond" (less common on FreeBSD but handled)
+    if procs.contains(&format!("{}d", name)) {
+        return true;
+    }
+    false
+}
+
 pub fn list_services() -> Vec<ServiceInfo> {
     let mut services = Vec::new();
 
@@ -35,26 +66,30 @@ pub fn list_services() -> Vec<ServiceInfo> {
         }
     }
 
+    // Get all running process names in one call (avoids pidfile permission issues)
+    let procs = running_process_names();
+
     let output = Command::new(SERVICE).arg("-e").output().ok();
     if let Some(out) = output {
         let stdout = String::from_utf8_lossy(&out.stdout);
-        let enabled: HashSet<&str> = stdout
+        let enabled: HashSet<String> = stdout
             .lines()
-            .filter_map(|line| line.trim().split('/').last())
+            .filter_map(|line| {
+                let base = line.trim().split('/').last()?;
+                if base.is_empty() { None } else { Some(base.to_string()) }
+            })
             .collect();
 
         for s in &mut services {
-            if enabled.contains(s.name.as_str()) {
+            if enabled.contains(&s.name) {
                 s.enabled = true;
-                let status = Command::new(SERVICE)
-                    .arg(&s.name)
-                    .arg("status")
-                    .output()
-                    .ok();
-                if let Some(st) = status {
-                    s.running = st.status.success();
-                }
             }
+            s.running = is_running(&s.name, &procs);
+        }
+    } else {
+        // Even without enabled list, still fill running state
+        for s in &mut services {
+            s.running = is_running(&s.name, &procs);
         }
     }
 

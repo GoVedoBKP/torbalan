@@ -106,12 +106,14 @@ export component AppWindow inherits Window {
                 spacing: 30px;
                 padding: 40px;
 
-                Image {
-                    source: @image-url("imgs/torbalan.png");
-                    width: 450px;
-                    height: 450px;
-                    image-fit: contain;
-                    horizontal-alignment: center;
+                HorizontalBox {
+                    alignment: center;
+                    Image {
+                        source: @image-url("imgs/torbalan.png");
+                        width: 450px;
+                        height: 450px;
+                        image-fit: contain;
+                    }
                 }
 
                 Text {
