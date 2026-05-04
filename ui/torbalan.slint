@@ -21,6 +21,7 @@ export struct PackageEntry {
     comment: string,
     is-installed: bool,
     marked: bool,
+    is-header: bool,
 }
 
 export component AppWindow inherits Window {
@@ -237,30 +238,45 @@ export component AppWindow inherits Window {
                         VerticalBox {
                             alignment: start;
                             padding: 4px;
-                            spacing: 4px;
+                            spacing: 2px;
                             for entry in root.packages : Rectangle {
-                                height: 52px;
-                                background: entry.marked ? #e8f0fe : (entry.is-installed ? #f8fff8 : #ffffff);
-                                border-radius: 4px;
-                                border-width: 1px;
+                                height: entry.is-header ? 30px : 52px;
+                                background: entry.is-header ? #222222
+                                          : entry.marked   ? #e8f0fe
+                                          : entry.is-installed ? #f0fff0
+                                          : #ffffff;
+                                border-radius: entry.is-header ? 0px : 4px;
+                                border-width: entry.is-header ? 0px : 1px;
                                 border-color: entry.marked ? #4a90d9 : #e0e0e0;
-                                HorizontalBox {
+
+                                // Category header row
+                                if (entry.is-header) : HorizontalBox {
+                                    padding-left: 12px;
+                                    Text {
+                                        text: entry.name;
+                                        font-size: 13px;
+                                        font-weight: 900;
+                                        color: #aaaaaa;
+                                        letter-spacing: 2px;
+                                        vertical-alignment: center;
+                                    }
+                                }
+
+                                // Package row
+                                if (!entry.is-header) : HorizontalBox {
                                     padding: 8px;
                                     spacing: 8px;
-                                    // Checkbox
                                     CheckBox {
                                         width: 20px;
                                         checked: entry.marked;
                                         toggled => { root.toggle-package-mark(entry.name) }
                                     }
-                                    // Name + description
                                     VerticalBox {
-                                        width: 380px;
+                                        width: 340px;
                                         spacing: 2px;
-                                        Text { text: entry.name; font-weight: 700; color: #000000; font-size: 15px; overflow: elide; }
-                                        Text { text: entry.comment; font-size: 12px; color: #555555; overflow: elide; }
+                                        Text { text: entry.name;    font-weight: 700; color: #000000; font-size: 15px; overflow: elide; }
+                                        Text { text: entry.comment; font-size: 12px;  color: #555555; overflow: elide; }
                                     }
-                                    // Version
                                     Text {
                                         text: entry.version;
                                         width: 160px;
@@ -270,7 +286,6 @@ export component AppWindow inherits Window {
                                         color: #333333;
                                         overflow: elide;
                                     }
-                                    // Status badge
                                     Rectangle {
                                         width: 90px; height: 26px;
                                         background: entry.is-installed ? #2e8b57 : #888888;
@@ -281,7 +296,6 @@ export component AppWindow inherits Window {
                                             horizontal-alignment: center; vertical-alignment: center;
                                         }
                                     }
-                                    // Action button
                                     Button {
                                         text: entry.is-installed ? "Remove" : "Install";
                                         width: 80px;

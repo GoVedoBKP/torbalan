@@ -56,11 +56,11 @@ fn main() -> Result<(), slint::PlatformError> {
         let updated: Vec<PackageEntry> = (0..model.row_count())
             .filter_map(|i| model.row_data(i))
             .map(|mut e| {
-                if e.name == name { e.marked = !e.marked; }
+                if !e.is_header && e.name == name { e.marked = !e.marked; }
                 e
             })
             .collect();
-        let count = updated.iter().filter(|e| e.marked).count();
+        let count = updated.iter().filter(|e| !e.is_header && e.marked).count();
         ui.set_packages(ModelRc::from(Rc::new(VecModel::from(updated))));
         ui.set_marked_count(count as i32);
     });
@@ -104,7 +104,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let model = ui.get_packages();
         let names: Vec<String> = (0..model.row_count())
             .filter_map(|i| model.row_data(i))
-            .filter(|e| e.marked && e.is_installed)
+            .filter(|e| !e.is_header && e.marked && e.is_installed)
             .map(|e| e.name.to_string())
             .collect();
         if names.is_empty() { return; }
@@ -127,7 +127,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let model = ui.get_packages();
         let names: Vec<String> = (0..model.row_count())
             .filter_map(|i| model.row_data(i))
-            .filter(|e| e.marked && !e.is_installed)
+            .filter(|e| !e.is_header && e.marked && !e.is_installed)
             .map(|e| e.name.to_string())
             .collect();
         if names.is_empty() { return; }
@@ -150,19 +150,12 @@ fn main() -> Result<(), slint::PlatformError> {
         let ui_weak = ui_handle.clone();
         if let Some(ui) = ui_weak.upgrade() { ui.set_loading(true); }
         std::thread::spawn(move || {
-            let installed = pkg::list_installed();
-            let catalog = if query_str.is_empty() {
-                Vec::new()
+            let packages = if query_str.is_empty() {
+                pkg::list_all_packages()
             } else {
-                pkg::search_catalog(&query_str)
+                pkg::search_packages(&query_str)
             };
-            let mut entries = make_slint_entries(installed, catalog);
-            if !query_str.is_empty() {
-                entries.retain(|e| {
-                    e.name.to_lowercase().contains(&query_str)
-                        || e.comment.to_lowercase().contains(&query_str)
-                });
-            }
+            let entries = make_slint_entries(packages);
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(ui) = ui_weak.upgrade() {
                     ui.set_packages(ModelRc::from(Rc::new(VecModel::from(entries))));
@@ -177,30 +170,33 @@ fn main() -> Result<(), slint::PlatformError> {
 }
 
 
-fn make_slint_entries(
-    installed: Vec<pkg::PackageEntry>,
-    catalog: Vec<pkg::PackageEntry>,
-) -> Vec<PackageEntry> {
-    let mut entries: Vec<PackageEntry> = installed
-        .into_iter()
-        .map(|p| PackageEntry {
-            name: SharedString::from(p.name),
-            version: SharedString::from(p.version),
-            comment: SharedString::from(p.comment),
-            is_installed: true,
+fn make_slint_entries(packages: Vec<pkg::PackageEntry>) -> Vec<PackageEntry> {
+    // packages must already be sorted by origin (category/name)
+    let mut result = Vec::new();
+    let mut current_cat = String::new();
+    for p in packages {
+        let cat = p.category().to_string();
+        if cat != current_cat {
+            result.push(PackageEntry {
+                name: SharedString::from(cat.to_uppercase()),
+                version: SharedString::new(),
+                comment: SharedString::new(),
+                is_installed: false,
+                marked: false,
+                is_header: true,
+            });
+            current_cat = cat;
+        }
+        result.push(PackageEntry {
+            name: SharedString::from(&p.name),
+            version: SharedString::from(&p.version),
+            comment: SharedString::from(&p.comment),
+            is_installed: p.is_installed,
             marked: false,
-        })
-        .collect();
-    for p in catalog {
-        entries.push(PackageEntry {
-            name: SharedString::from(p.name),
-            version: SharedString::from(p.version),
-            comment: SharedString::from(p.comment),
-            is_installed: false,
-            marked: false,
+            is_header: false,
         });
     }
-    entries
+    result
 }
 
 fn load_page_data_async(ui_weak: Weak<AppWindow>, page: &str) {
@@ -244,7 +240,7 @@ fn load_page_data_async(ui_weak: Weak<AppWindow>, page: &str) {
             });
         }
         "packages" => {
-            let entries = make_slint_entries(pkg::list_installed(), Vec::new());
+            let entries = make_slint_entries(pkg::list_all_packages());
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(ui) = ui_weak.upgrade() {
                     ui.set_packages(ModelRc::from(Rc::new(VecModel::from(entries))));
