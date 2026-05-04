@@ -1,13 +1,18 @@
-use std::{collections::HashMap, process::Command};
+use std::{
+    collections::HashMap,
+    process::Command,
+    sync::{Arc, Mutex},
+};
 
 const PKG: &str = "/usr/local/sbin/pkg";
+const MAX_DISPLAY: usize = 1000;
 
 #[derive(Clone, Debug)]
 pub struct PackageEntry {
     pub name: String,
     pub version: String,
     pub comment: String,
-    pub origin: String,   // e.g. "www/curl"  — category is the first component
+    pub origin: String,
     pub is_installed: bool,
 }
 
@@ -17,16 +22,21 @@ impl PackageEntry {
     }
 }
 
-/// All packages from the repository, merged with local install state.
-/// Sorted by category then name.
-pub fn list_all_packages() -> Vec<PackageEntry> {
-    // Collect installed packages into a map keyed by name.
+/// Shared catalog cache — populated once in a background thread.
+pub type Catalog = Arc<Mutex<Option<Vec<PackageEntry>>>>;
+
+pub fn new_catalog() -> Catalog {
+    Arc::new(Mutex::new(None))
+}
+
+/// Load the full repo catalog (slow, ~37k packages) and store in the cache.
+/// Intended to be called from a background thread at startup.
+pub fn preload_catalog(cache: &Catalog) {
     let installed: HashMap<String, PackageEntry> = query_installed()
         .into_iter()
         .map(|p| (p.name.clone(), p))
         .collect();
 
-    // Query the full remote catalog.
     let output = Command::new(PKG)
         .args(["rquery", "-a", "%n|%v|%o|%c"])
         .output()
@@ -56,28 +66,63 @@ pub fn list_all_packages() -> Vec<PackageEntry> {
         }
     }
 
-    // Fall back to installed-only if the repo catalog is empty.
-    if packages.is_empty() {
-        let mut fallback: Vec<PackageEntry> = installed.into_values().collect();
-        fallback.sort_by(|a, b| {
-            a.origin.cmp(&b.origin).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-        });
-        return fallback;
-    }
-
     packages.sort_by(|a, b| {
-        a.origin.cmp(&b.origin).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+        a.origin.cmp(&b.origin)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+
+    *cache.lock().unwrap() = Some(packages);
+}
+
+/// Installed packages, sorted by category then name. Fast.
+pub fn list_installed() -> Vec<PackageEntry> {
+    let mut packages = query_installed();
+    packages.sort_by(|a, b| {
+        a.origin.cmp(&b.origin)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
     });
     packages
 }
 
-/// Installed packages only (used for post-action refresh and search base).
-pub fn list_installed() -> Vec<PackageEntry> {
-    let mut packages = query_installed();
-    packages.sort_by(|a, b| {
-        a.origin.cmp(&b.origin).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+/// Filter the catalog (or installed list if catalog not ready) by query.
+/// Returns at most MAX_DISPLAY results, already sorted by origin/name.
+pub fn search(query: &str, catalog: &Catalog) -> (Vec<PackageEntry>, usize) {
+    let q = query.to_lowercase();
+    let guard = catalog.lock().unwrap();
+
+    let source: &[PackageEntry] = match &*guard {
+        Some(all) => all.as_slice(),
+        None => return (list_installed_filtered(&q), 0),
+    };
+
+    let total = source.len();
+    let matches: Vec<PackageEntry> = source
+        .iter()
+        .filter(|p| {
+            p.name.to_lowercase().contains(&q)
+                || p.comment.to_lowercase().contains(&q)
+        })
+        .take(MAX_DISPLAY)
+        .cloned()
+        .collect();
+
+    (matches, total)
+}
+
+fn list_installed_filtered(q: &str) -> Vec<PackageEntry> {
+    let mut pkgs = query_installed();
+    pkgs.retain(|p| {
+        p.name.to_lowercase().contains(q) || p.comment.to_lowercase().contains(q)
     });
-    packages
+    pkgs.sort_by(|a, b| {
+        a.origin.cmp(&b.origin)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+    pkgs
+}
+
+pub fn total_in_catalog(catalog: &Catalog) -> Option<usize> {
+    catalog.lock().unwrap().as_ref().map(|v| v.len())
 }
 
 fn query_installed() -> Vec<PackageEntry> {
@@ -105,21 +150,9 @@ fn query_installed() -> Vec<PackageEntry> {
     packages
 }
 
-/// Search the repo catalog for packages matching `query` (case-insensitive
-/// substring on name or comment). Returns all matches, merged with installed state.
-pub fn search_packages(query: &str) -> Vec<PackageEntry> {
-    let q = query.to_lowercase();
-    list_all_packages()
-        .into_iter()
-        .filter(|p| p.name.to_lowercase().contains(&q) || p.comment.to_lowercase().contains(&q))
-        .collect()
-}
-
 pub fn install(name: &str) -> bool {
     Command::new(PKG)
-        .arg("install")
-        .arg("-y")
-        .arg(name)
+        .args(["install", "-y", name])
         .status()
         .map(|s| s.success())
         .unwrap_or(false)
@@ -127,9 +160,7 @@ pub fn install(name: &str) -> bool {
 
 pub fn remove(name: &str) -> bool {
     Command::new(PKG)
-        .arg("delete")
-        .arg("-y")
-        .arg(name)
+        .args(["delete", "-y", name])
         .status()
         .map(|s| s.success())
         .unwrap_or(false)
