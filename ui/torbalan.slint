@@ -103,24 +103,17 @@ export component AppWindow inherits Window {
             // ── Login ────────────────────────────────────────────────────────
             if (!logged-in) : VerticalBox {
                 alignment: center;
-                spacing: 40px;
+                spacing: 30px;
                 padding: 40px;
 
                 Image {
                     source: @image-url("imgs/torbalan.png");
-                    width: 400px;
-                    height: 400px;
+                    width: 450px;
+                    height: 450px;
                     image-fit: contain;
                     horizontal-alignment: center;
                 }
 
-                Text {
-                    text: "TORBALAN";
-                    font-size: 56px;
-                    font-weight: 900;
-                    horizontal-alignment: center;
-                    color: #000000;
-                }
                 Text {
                     text: "FREEBSD SYSTEM ADMINISTRATION";
                     font-size: 18px;
