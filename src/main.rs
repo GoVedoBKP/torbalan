@@ -5,6 +5,7 @@ mod sysctl;
 mod service;
 mod pkg;
 mod users;
+mod hardening;
 
 use pkg::Catalog;
 use slint::{Model, ModelRc, VecModel, SharedString, Weak};
@@ -50,9 +51,10 @@ fn main() -> Result<(), slint::PlatformError> {
         let ui = ui_handle.unwrap();
         ui.set_active_page(page.clone());
         match page.as_str() {
-            "packages" => load_page_data_async(ui.as_weak()),
-            "users" => load_users_and_groups(ui.as_weak()),
-            other => load_sysctl_or_service(ui.as_weak(), other),
+            "packages"  => load_page_data_async(ui.as_weak()),
+            "users"     => load_users_and_groups(ui.as_weak()),
+            "hardening" => load_hardening(ui.as_weak()),
+            other       => load_sysctl_or_service(ui.as_weak(), other),
         }
     });
 
@@ -399,6 +401,29 @@ fn main() -> Result<(), slint::PlatformError> {
         });
     });
 
+    // Hardening: apply checked options to system config files.
+    let ui_handle = ui.as_weak();
+    ui.on_apply_hardening(move || {
+        if let Some(ui) = ui_handle.upgrade() {
+            let state = hardening::HardeningState {
+                hide_uids:       ui.get_hd_hide_uids(),
+                hide_gids:       ui.get_hd_hide_gids(),
+                hide_jail:       ui.get_hd_hide_jail(),
+                read_msgbuf:     ui.get_hd_read_msgbuf(),
+                proc_debug:      ui.get_hd_proc_debug(),
+                random_pid:      ui.get_hd_random_pid(),
+                clear_tmp:       ui.get_hd_clear_tmp(),
+                disable_syslogd: ui.get_hd_disable_syslogd(),
+                secure_console:  ui.get_hd_secure_console(),
+                disable_ddtrace: ui.get_hd_disable_ddtrace(),
+            };
+            match hardening::apply_state(&state) {
+                Ok(()) => ui.set_hardening_status("OK".into()),
+                Err(e) => ui.set_hardening_status(e.into()),
+            }
+        }
+    });
+
     ui.run()
 }
 
@@ -508,6 +533,23 @@ fn load_users_and_groups(ui_weak: Weak<AppWindow>) {
             }
         });
     });
+}
+
+fn load_hardening(ui_weak: Weak<AppWindow>) {
+    let state = hardening::read_state();
+    if let Some(ui) = ui_weak.upgrade() {
+        ui.set_hd_hide_uids(state.hide_uids);
+        ui.set_hd_hide_gids(state.hide_gids);
+        ui.set_hd_hide_jail(state.hide_jail);
+        ui.set_hd_read_msgbuf(state.read_msgbuf);
+        ui.set_hd_proc_debug(state.proc_debug);
+        ui.set_hd_random_pid(state.random_pid);
+        ui.set_hd_clear_tmp(state.clear_tmp);
+        ui.set_hd_disable_syslogd(state.disable_syslogd);
+        ui.set_hd_secure_console(state.secure_console);
+        ui.set_hd_disable_ddtrace(state.disable_ddtrace);
+        ui.set_hardening_status("".into());
+    }
 }
 
 fn load_sysctl_or_service(ui_weak: Weak<AppWindow>, page: &str) {

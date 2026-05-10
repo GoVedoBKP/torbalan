@@ -68,6 +68,10 @@ export component AppWindow inherits Window {
     callback save-group();
     callback do-delete-group(string);
 
+    // Hardening callbacks
+    callback load-hardening();
+    callback apply-hardening();
+
     in property <bool> logged-in: false;
     in property <string> active-page: "sysctl";
     in property <bool> loading: false;
@@ -108,6 +112,19 @@ export component AppWindow inherits Window {
     in-out property <string> gf-gid: "";
     in-out property <string> gf-members: "";
 
+    // Hardening state
+    in-out property <bool> hd-hide-uids: false;
+    in-out property <bool> hd-hide-gids: false;
+    in-out property <bool> hd-hide-jail: false;
+    in-out property <bool> hd-read-msgbuf: false;
+    in-out property <bool> hd-proc-debug: false;
+    in-out property <bool> hd-random-pid: false;
+    in-out property <bool> hd-clear-tmp: false;
+    in-out property <bool> hd-disable-syslogd: false;
+    in-out property <bool> hd-secure-console: false;
+    in-out property <bool> hd-disable-ddtrace: false;
+    in-out property <string> hardening-status: "";
+
     HorizontalBox {
         padding: 0;
         spacing: 0;
@@ -140,10 +157,11 @@ export component AppWindow inherits Window {
 
                 Rectangle { height: 10px; }
 
-                Button { text: "Sysctl";    clicked => { root.change-page("sysctl") } }
-                Button { text: "Services";  clicked => { root.change-page("services") } }
-                Button { text: "Packages";  clicked => { root.change-page("packages") } }
-                Button { text: "Users";     clicked => { root.change-page("users") } }
+                Button { text: "Sysctl";     clicked => { root.change-page("sysctl") } }
+                Button { text: "Services";   clicked => { root.change-page("services") } }
+                Button { text: "Packages";   clicked => { root.change-page("packages") } }
+                Button { text: "Users";      clicked => { root.change-page("users") } }
+                Button { text: "Hardening";  clicked => { root.change-page("hardening") } }
 
                 if (root.loading) : VerticalBox {
                     Rectangle { height: 4px; background: #00ff00; }
@@ -198,10 +216,11 @@ export component AppWindow inherits Window {
 
                 // Page title
                 Text {
-                    text: root.active-page == "sysctl"   ? "KERNEL PARAMETERS" :
-                          root.active-page == "services" ? "SYSTEM SERVICES"   :
-                          root.active-page == "users"    ? "USER MANAGEMENT"   :
-                                                           "PACKAGE MANAGER";
+                    text: root.active-page == "sysctl"     ? "KERNEL PARAMETERS" :
+                          root.active-page == "services"   ? "SYSTEM SERVICES"   :
+                          root.active-page == "users"      ? "USER MANAGEMENT"   :
+                          root.active-page == "hardening"  ? "SYSTEM HARDENING"  :
+                                                             "PACKAGE MANAGER";
                     font-size: 30px;
                     font-weight: 900;
                     color: #000000;
@@ -836,6 +855,182 @@ export component AppWindow inherits Window {
                                     root.users-status = "";
                                 }
                             }
+                        }
+                    }
+                }
+
+                // ── Hardening ────────────────────────────────────────────────
+                if (root.active-page == "hardening") : VerticalBox {
+                    spacing: 12px;
+
+                    Text {
+                        text: "Enable or disable system security hardening options. Changes are written to /etc/sysctl.conf, /etc/rc.conf, /boot/loader.conf, and /etc/ttys and take effect immediately where possible.";
+                        color: #444444;
+                        wrap: word-wrap;
+                    }
+
+                    Rectangle { height: 4px; background: #eeeeee; }
+
+                    // Option rows
+                    VerticalBox {
+                        spacing: 8px;
+
+                        HorizontalBox {
+                            spacing: 12px;
+                            CheckBox {
+                                checked <=> root.hd-hide-uids;
+                                text: "Hide processes of other users";
+                            }
+                            Text {
+                                text: "Unprivileged users cannot see processes owned by other UIDs  (security.bsd.see_other_uids=0)";
+                                color: #666666;
+                                vertical-alignment: center;
+                                wrap: word-wrap;
+                            }
+                        }
+
+                        HorizontalBox {
+                            spacing: 12px;
+                            CheckBox {
+                                checked <=> root.hd-hide-gids;
+                                text: "Hide processes of other groups";
+                            }
+                            Text {
+                                text: "Unprivileged users cannot see processes owned by other GIDs  (security.bsd.see_other_gids=0)";
+                                color: #666666;
+                                vertical-alignment: center;
+                                wrap: word-wrap;
+                            }
+                        }
+
+                        HorizontalBox {
+                            spacing: 12px;
+                            CheckBox {
+                                checked <=> root.hd-hide-jail;
+                                text: "Hide jail processes";
+                            }
+                            Text {
+                                text: "Processes inside jails are invisible to users outside the jail  (security.bsd.see_jail_proc=0)";
+                                color: #666666;
+                                vertical-alignment: center;
+                                wrap: word-wrap;
+                            }
+                        }
+
+                        HorizontalBox {
+                            spacing: 12px;
+                            CheckBox {
+                                checked <=> root.hd-read-msgbuf;
+                                text: "Restrict kernel message buffer";
+                            }
+                            Text {
+                                text: "Unprivileged users cannot read the kernel message buffer  (security.bsd.unprivileged_read_msgbuf=0)";
+                                color: #666666;
+                                vertical-alignment: center;
+                                wrap: word-wrap;
+                            }
+                        }
+
+                        HorizontalBox {
+                            spacing: 12px;
+                            CheckBox {
+                                checked <=> root.hd-proc-debug;
+                                text: "Restrict process debugging";
+                            }
+                            Text {
+                                text: "Disables ptrace and other debugging facilities for unprivileged users  (security.bsd.unprivileged_proc_debug=0)";
+                                color: #666666;
+                                vertical-alignment: center;
+                                wrap: word-wrap;
+                            }
+                        }
+
+                        HorizontalBox {
+                            spacing: 12px;
+                            CheckBox {
+                                checked <=> root.hd-random-pid;
+                                text: "Randomize process IDs";
+                            }
+                            Text {
+                                text: "New processes receive random PIDs instead of sequential ones  (kern.randompid=1)";
+                                color: #666666;
+                                vertical-alignment: center;
+                                wrap: word-wrap;
+                            }
+                        }
+
+                        HorizontalBox {
+                            spacing: 12px;
+                            CheckBox {
+                                checked <=> root.hd-clear-tmp;
+                                text: "Clear /tmp on startup";
+                            }
+                            Text {
+                                text: "Wipes /tmp at every boot, preventing leftover sensitive files  (clear_tmp_enable=YES)";
+                                color: #666666;
+                                vertical-alignment: center;
+                                wrap: word-wrap;
+                            }
+                        }
+
+                        HorizontalBox {
+                            spacing: 12px;
+                            CheckBox {
+                                checked <=> root.hd-disable-syslogd;
+                                text: "Disable syslogd network socket";
+                            }
+                            Text {
+                                text: "Prevents syslogd from listening on the network, disabling remote logging  (syslogd_flags=-ss)";
+                                color: #666666;
+                                vertical-alignment: center;
+                                wrap: word-wrap;
+                            }
+                        }
+
+                        HorizontalBox {
+                            spacing: 12px;
+                            CheckBox {
+                                checked <=> root.hd-secure-console;
+                                text: "Require password at console (secure console)";
+                            }
+                            Text {
+                                text: "Console drops to password prompt before single-user mode  (/etc/ttys insecure mode)";
+                                color: #666666;
+                                vertical-alignment: center;
+                                wrap: word-wrap;
+                            }
+                        }
+
+                        HorizontalBox {
+                            spacing: 12px;
+                            CheckBox {
+                                checked <=> root.hd-disable-ddtrace;
+                                text: "Disallow DTrace destructive-mode";
+                            }
+                            Text {
+                                text: "Prevents DTrace from using destructive actions  (security.bsd.allow_destructive_dtrace=0 in loader.conf)";
+                                color: #666666;
+                                vertical-alignment: center;
+                                wrap: word-wrap;
+                            }
+                        }
+                    }
+
+                    Rectangle { height: 4px; background: #eeeeee; }
+
+                    // Apply bar
+                    HorizontalBox {
+                        spacing: 12px;
+                        Button {
+                            text: "Apply";
+                            primary: true;
+                            clicked => { root.apply-hardening() }
+                        }
+                        if (root.hardening-status != "") : Text {
+                            text: root.hardening-status;
+                            color: root.hardening-status == "OK" ? #008800 : #cc0000;
+                            vertical-alignment: center;
+                            font-weight: 700;
                         }
                     }
                 }
