@@ -1,4 +1,4 @@
-import { Button, VerticalBox, HorizontalBox, ScrollView, LineEdit, CheckBox } from "std-widgets.slint";
+import { Button, VerticalBox, HorizontalBox, ScrollView, LineEdit, CheckBox, Switch } from "std-widgets.slint";
 
 import "fonts/LiberationSans-Regular.ttf";
 import "fonts/LiberationSans-Bold.ttf";
@@ -24,6 +24,22 @@ export struct PackageEntry {
     is-header: bool,
 }
 
+export struct UserEntry {
+    name: string,
+    uid: int,
+    primary-group: string,
+    home: string,
+    shell: string,
+    comment: string,
+    locked: bool,
+}
+
+export struct GroupEntry {
+    name: string,
+    gid: int,
+    members: string,
+}
+
 export component AppWindow inherits Window {
     title: "Torbalan - FreeBSD System Manager";
     preferred-width: 1000px;
@@ -42,6 +58,16 @@ export component AppWindow inherits Window {
     callback remove-marked();
     callback search-packages(string);
 
+    // User/group management callbacks
+    callback new-user-form();
+    callback edit-user-form(string);
+    callback save-user();
+    callback do-delete-user(string);
+    callback new-group-form();
+    callback edit-group-form(string);
+    callback save-group();
+    callback do-delete-group(string);
+
     in property <bool> logged-in: false;
     in property <string> active-page: "sysctl";
     in property <bool> loading: false;
@@ -52,6 +78,35 @@ export component AppWindow inherits Window {
     in property <[SysctlEntry]> sysctls: [];
     in property <[ServiceEntry]> services: [];
     in-out property <[PackageEntry]> packages: [];
+    in property <[UserEntry]> users: [];
+    in property <[GroupEntry]> groups: [];
+
+    // Users view state
+    in-out property <string> users-sub-page: "users";
+    in-out property <bool> show-user-form: false;
+    in-out property <bool> show-group-form: false;
+    in-out property <bool> user-form-is-edit: false;
+    in-out property <bool> group-form-is-edit: false;
+    in-out property <string> users-status: "";
+    in-out property <string> confirm-delete-user: "";
+    in-out property <string> confirm-delete-group: "";
+
+    // User form fields
+    in-out property <string> uf-name: "";
+    in-out property <string> uf-comment: "";
+    in-out property <string> uf-uid: "";
+    in-out property <string> uf-primary-group: "";
+    in-out property <string> uf-extra-groups: "";
+    in-out property <string> uf-home: "";
+    in-out property <string> uf-shell: "";
+    in-out property <string> uf-password: "";
+    in-out property <bool> uf-create-home: true;
+    in-out property <bool> uf-locked: false;
+
+    // Group form fields
+    in-out property <string> gf-name: "";
+    in-out property <string> gf-gid: "";
+    in-out property <string> gf-members: "";
 
     HorizontalBox {
         padding: 0;
@@ -88,6 +143,7 @@ export component AppWindow inherits Window {
                 Button { text: "Sysctl";    clicked => { root.change-page("sysctl") } }
                 Button { text: "Services";  clicked => { root.change-page("services") } }
                 Button { text: "Packages";  clicked => { root.change-page("packages") } }
+                Button { text: "Users";     clicked => { root.change-page("users") } }
 
                 if (root.loading) : VerticalBox {
                     Rectangle { height: 4px; background: #00ff00; }
@@ -144,6 +200,7 @@ export component AppWindow inherits Window {
                 Text {
                     text: root.active-page == "sysctl"   ? "KERNEL PARAMETERS" :
                           root.active-page == "services" ? "SYSTEM SERVICES"   :
+                          root.active-page == "users"    ? "USER MANAGEMENT"   :
                                                            "PACKAGE MANAGER";
                     font-size: 30px;
                     font-weight: 900;
@@ -336,6 +393,448 @@ export component AppWindow inherits Window {
                             Button {
                                 text: "Remove Selected";
                                 clicked => { root.remove-marked() }
+                            }
+                        }
+                    }
+                }
+
+                // ── Users & Groups ───────────────────────────────────────────
+                if (root.active-page == "users") : VerticalBox {
+                    spacing: 8px;
+
+                    // Sub-navigation + action button
+                    HorizontalBox {
+                        spacing: 8px;
+                        Button {
+                            text: "Users";
+                            primary: root.users-sub-page == "users";
+                            clicked => {
+                                root.users-sub-page = "users";
+                                root.show-user-form = false;
+                                root.show-group-form = false;
+                                root.users-status = "";
+                            }
+                        }
+                        Button {
+                            text: "Groups";
+                            primary: root.users-sub-page == "groups";
+                            clicked => {
+                                root.users-sub-page = "groups";
+                                root.show-user-form = false;
+                                root.show-group-form = false;
+                                root.users-status = "";
+                            }
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                        if (!root.show-user-form && !root.show-group-form) : Button {
+                            text: root.users-sub-page == "users" ? "+ Add User" : "+ Add Group";
+                            primary: true;
+                            clicked => {
+                                if (root.users-sub-page == "users") { root.new-user-form() }
+                                else { root.new-group-form() }
+                            }
+                        }
+                    }
+
+                    // Status / error message
+                    if (root.users-status != "") : Rectangle {
+                        height: 36px;
+                        background: root.users-status == "OK" ? #2e8b57 : #cc2222;
+                        border-radius: 6px;
+                        Text {
+                            text: root.users-status == "OK" ? "Operation completed successfully." : root.users-status;
+                            color: #ffffff; font-size: 13px; font-weight: 700;
+                            horizontal-alignment: center; vertical-alignment: center;
+                        }
+                    }
+
+                    // Confirm delete user bar
+                    if (root.confirm-delete-user != "") : Rectangle {
+                        height: 50px;
+                        background: #cc2222;
+                        border-radius: 8px;
+                        HorizontalBox {
+                            padding: 10px; spacing: 12px;
+                            Text {
+                                text: "Delete user '" + root.confirm-delete-user + "'? This cannot be undone.";
+                                color: #ffffff; font-weight: 700; vertical-alignment: center;
+                            }
+                            Rectangle { horizontal-stretch: 1; }
+                            Button {
+                                text: "Confirm Delete";
+                                clicked => {
+                                    root.do-delete-user(root.confirm-delete-user);
+                                    root.confirm-delete-user = "";
+                                }
+                            }
+                            Button {
+                                text: "Cancel";
+                                clicked => { root.confirm-delete-user = ""; }
+                            }
+                        }
+                    }
+
+                    // Confirm delete group bar
+                    if (root.confirm-delete-group != "") : Rectangle {
+                        height: 50px;
+                        background: #cc2222;
+                        border-radius: 8px;
+                        HorizontalBox {
+                            padding: 10px; spacing: 12px;
+                            Text {
+                                text: "Delete group '" + root.confirm-delete-group + "'? This cannot be undone.";
+                                color: #ffffff; font-weight: 700; vertical-alignment: center;
+                            }
+                            Rectangle { horizontal-stretch: 1; }
+                            Button {
+                                text: "Confirm Delete";
+                                clicked => {
+                                    root.do-delete-group(root.confirm-delete-group);
+                                    root.confirm-delete-group = "";
+                                }
+                            }
+                            Button {
+                                text: "Cancel";
+                                clicked => { root.confirm-delete-group = ""; }
+                            }
+                        }
+                    }
+
+                    // ── User list ───────────────────────────────────────────
+                    if (root.users-sub-page == "users" && !root.show-user-form) : VerticalBox {
+                        spacing: 4px;
+                        // Column headers
+                        HorizontalBox {
+                            padding-left: 12px; padding-right: 12px; spacing: 8px;
+                            Text { text: "Username";    width: 180px; font-weight: 900; color: #555555; font-size: 12px; }
+                            Text { text: "UID";          width: 60px;  font-weight: 900; color: #555555; font-size: 12px; }
+                            Text { text: "Group";        width: 120px; font-weight: 900; color: #555555; font-size: 12px; }
+                            Text { text: "Shell";        horizontal-stretch: 1; font-weight: 900; color: #555555; font-size: 12px; }
+                            Text { text: "Full Name";    width: 200px; font-weight: 900; color: #555555; font-size: 12px; }
+                            Text { text: "Status";       width: 80px;  font-weight: 900; color: #555555; font-size: 12px; }
+                            Rectangle { width: 155px; }
+                        }
+                        Rectangle { height: 1px; background: #cccccc; }
+
+                        ScrollView {
+                            VerticalBox {
+                                alignment: start;
+                                padding: 4px;
+                                spacing: 4px;
+                                for entry in root.users : Rectangle {
+                                    height: 54px;
+                                    background: #ffffff;
+                                    border-radius: 6px;
+                                    border-width: 1px;
+                                    border-color: #e0e0e0;
+                                    HorizontalBox {
+                                        padding: 8px; spacing: 8px;
+                                        Text {
+                                            text: entry.name;
+                                            width: 180px;
+                                            font-weight: 700;
+                                            font-size: 15px;
+                                            color: #000000;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                        }
+                                        Text {
+                                            text: entry.uid + "";
+                                            width: 60px;
+                                            vertical-alignment: center;
+                                            font-family: "Liberation Mono";
+                                            font-size: 13px;
+                                            color: #555555;
+                                        }
+                                        Text {
+                                            text: entry.primary-group;
+                                            width: 120px;
+                                            vertical-alignment: center;
+                                            font-size: 14px;
+                                            color: #333333;
+                                            overflow: elide;
+                                        }
+                                        Text {
+                                            text: entry.shell;
+                                            horizontal-stretch: 1;
+                                            vertical-alignment: center;
+                                            font-family: "Liberation Mono";
+                                            font-size: 12px;
+                                            color: #555555;
+                                            overflow: elide;
+                                        }
+                                        Text {
+                                            text: entry.comment;
+                                            width: 200px;
+                                            vertical-alignment: center;
+                                            font-size: 13px;
+                                            color: #444444;
+                                            overflow: elide;
+                                        }
+                                        Rectangle {
+                                            width: 76px; height: 24px;
+                                            background: entry.locked ? #cc2222 : #2e8b57;
+                                            border-radius: 12px;
+                                            Text {
+                                                text: entry.locked ? "LOCKED" : "ACTIVE";
+                                                color: #ffffff; font-size: 11px; font-weight: 900;
+                                                horizontal-alignment: center; vertical-alignment: center;
+                                            }
+                                        }
+                                        Button {
+                                            text: "Edit"; width: 70px;
+                                            clicked => { root.edit-user-form(entry.name) }
+                                        }
+                                        Button {
+                                            text: "Delete"; width: 70px;
+                                            clicked => { root.confirm-delete-user = entry.name; }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // ── User form (add / edit) ───────────────────────────────
+                    if (root.show-user-form) : ScrollView {
+                        VerticalBox {
+                            alignment: start;
+                            padding: 20px;
+                            spacing: 12px;
+
+                            Text {
+                                text: root.user-form-is-edit ? "EDIT USER" : "ADD USER";
+                                font-size: 22px; font-weight: 900; color: #000000;
+                            }
+                            Rectangle { height: 4px; background: #cccccc; }
+
+                            // Row helper: label + field
+                            HorizontalBox { spacing: 12px;
+                                Text { text: "Username:"; width: 160px; vertical-alignment: center; font-weight: 700; }
+                                LineEdit {
+                                    text <=> root.uf-name;
+                                    enabled: !root.user-form-is-edit;
+                                    placeholder-text: "login name (e.g. jsmith)";
+                                    height: 38px;
+                                }
+                            }
+                            HorizontalBox { spacing: 12px;
+                                Text { text: "Full Name:"; width: 160px; vertical-alignment: center; font-weight: 700; }
+                                LineEdit {
+                                    text <=> root.uf-comment;
+                                    placeholder-text: "Full name / comment";
+                                    height: 38px;
+                                }
+                            }
+                            HorizontalBox { spacing: 12px;
+                                Text { text: "UID:"; width: 160px; vertical-alignment: center; font-weight: 700; }
+                                LineEdit {
+                                    text <=> root.uf-uid;
+                                    enabled: !root.user-form-is-edit;
+                                    placeholder-text: "leave empty for auto";
+                                    height: 38px;
+                                }
+                            }
+                            HorizontalBox { spacing: 12px;
+                                Text { text: "Primary Group:"; width: 160px; vertical-alignment: center; font-weight: 700; }
+                                LineEdit {
+                                    text <=> root.uf-primary-group;
+                                    placeholder-text: "leave empty to create matching group";
+                                    height: 38px;
+                                }
+                            }
+                            HorizontalBox { spacing: 12px;
+                                Text { text: "Extra Groups:"; width: 160px; vertical-alignment: center; font-weight: 700; }
+                                LineEdit {
+                                    text <=> root.uf-extra-groups;
+                                    placeholder-text: "wheel,video,audio  (comma-separated)";
+                                    height: 38px;
+                                }
+                            }
+                            HorizontalBox { spacing: 12px;
+                                Text { text: "Home Directory:"; width: 160px; vertical-alignment: center; font-weight: 700; }
+                                LineEdit {
+                                    text <=> root.uf-home;
+                                    placeholder-text: "/home/username  (leave empty for default)";
+                                    height: 38px;
+                                }
+                            }
+                            HorizontalBox { spacing: 12px;
+                                Text { text: "Shell:"; width: 160px; vertical-alignment: center; font-weight: 700; }
+                                LineEdit {
+                                    text <=> root.uf-shell;
+                                    placeholder-text: "/bin/sh";
+                                    height: 38px;
+                                }
+                            }
+                            HorizontalBox { spacing: 12px;
+                                Text {
+                                    text: root.user-form-is-edit ? "New Password:" : "Password:";
+                                    width: 160px; vertical-alignment: center; font-weight: 700;
+                                }
+                                LineEdit {
+                                    text <=> root.uf-password;
+                                    input-type: password;
+                                    placeholder-text: root.user-form-is-edit
+                                        ? "leave empty to keep current"
+                                        : "leave empty to lock account";
+                                    height: 38px;
+                                }
+                            }
+
+                            if (!root.user-form-is-edit) : HorizontalBox { spacing: 12px;
+                                Rectangle { width: 160px; }
+                                CheckBox {
+                                    text: "Create home directory";
+                                    checked <=> root.uf-create-home;
+                                }
+                            }
+                            HorizontalBox { spacing: 12px;
+                                Rectangle { width: 160px; }
+                                CheckBox {
+                                    text: "Lock account (prevent login)";
+                                    checked <=> root.uf-locked;
+                                }
+                            }
+
+                            Rectangle { height: 8px; }
+                            HorizontalBox { spacing: 12px;
+                                Button {
+                                    text: "Save";
+                                    primary: true;
+                                    width: 120px;
+                                    clicked => { root.save-user() }
+                                }
+                                Button {
+                                    text: "Cancel";
+                                    width: 100px;
+                                    clicked => {
+                                        root.show-user-form = false;
+                                        root.users-status = "";
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // ── Group list ──────────────────────────────────────────
+                    if (root.users-sub-page == "groups" && !root.show-group-form) : VerticalBox {
+                        spacing: 4px;
+                        HorizontalBox {
+                            padding-left: 12px; padding-right: 12px; spacing: 8px;
+                            Text { text: "Group Name"; width: 200px; font-weight: 900; color: #555555; font-size: 12px; }
+                            Text { text: "GID";         width: 80px;  font-weight: 900; color: #555555; font-size: 12px; }
+                            Text { text: "Members";     horizontal-stretch: 1; font-weight: 900; color: #555555; font-size: 12px; }
+                            Rectangle { width: 155px; }
+                        }
+                        Rectangle { height: 1px; background: #cccccc; }
+
+                        ScrollView {
+                            VerticalBox {
+                                alignment: start;
+                                padding: 4px;
+                                spacing: 4px;
+                                for entry in root.groups : Rectangle {
+                                    height: 48px;
+                                    background: #ffffff;
+                                    border-radius: 6px;
+                                    border-width: 1px;
+                                    border-color: #e0e0e0;
+                                    HorizontalBox {
+                                        padding: 8px; spacing: 8px;
+                                        Text {
+                                            text: entry.name;
+                                            width: 200px;
+                                            font-weight: 700;
+                                            font-size: 15px;
+                                            color: #000000;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                        }
+                                        Text {
+                                            text: entry.gid + "";
+                                            width: 80px;
+                                            vertical-alignment: center;
+                                            font-family: "Liberation Mono";
+                                            font-size: 13px;
+                                            color: #555555;
+                                        }
+                                        Text {
+                                            text: entry.members;
+                                            horizontal-stretch: 1;
+                                            vertical-alignment: center;
+                                            font-size: 13px;
+                                            color: #444444;
+                                            overflow: elide;
+                                        }
+                                        Button {
+                                            text: "Edit"; width: 70px;
+                                            clicked => { root.edit-group-form(entry.name) }
+                                        }
+                                        Button {
+                                            text: "Delete"; width: 70px;
+                                            clicked => { root.confirm-delete-group = entry.name; }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // ── Group form (add / edit) ──────────────────────────────
+                    if (root.show-group-form) : VerticalBox {
+                        alignment: start;
+                        padding: 20px;
+                        spacing: 12px;
+
+                        Text {
+                            text: root.group-form-is-edit ? "EDIT GROUP" : "ADD GROUP";
+                            font-size: 22px; font-weight: 900; color: #000000;
+                        }
+                        Rectangle { height: 4px; background: #cccccc; }
+
+                        HorizontalBox { spacing: 12px;
+                            Text { text: "Group Name:"; width: 160px; vertical-alignment: center; font-weight: 700; }
+                            LineEdit {
+                                text <=> root.gf-name;
+                                enabled: !root.group-form-is-edit;
+                                placeholder-text: "group name";
+                                height: 38px;
+                            }
+                        }
+                        HorizontalBox { spacing: 12px;
+                            Text { text: "GID:"; width: 160px; vertical-alignment: center; font-weight: 700; }
+                            LineEdit {
+                                text <=> root.gf-gid;
+                                enabled: !root.group-form-is-edit;
+                                placeholder-text: "leave empty for auto";
+                                height: 38px;
+                            }
+                        }
+                        HorizontalBox { spacing: 12px;
+                            Text { text: "Members:"; width: 160px; vertical-alignment: center; font-weight: 700; }
+                            LineEdit {
+                                text <=> root.gf-members;
+                                placeholder-text: "user1,user2,user3  (comma-separated)";
+                                height: 38px;
+                            }
+                        }
+
+                        Rectangle { height: 8px; }
+                        HorizontalBox { spacing: 12px;
+                            Button {
+                                text: "Save";
+                                primary: true;
+                                width: 120px;
+                                clicked => { root.save-group() }
+                            }
+                            Button {
+                                text: "Cancel";
+                                width: 100px;
+                                clicked => {
+                                    root.show-group-form = false;
+                                    root.users-status = "";
+                                }
                             }
                         }
                     }

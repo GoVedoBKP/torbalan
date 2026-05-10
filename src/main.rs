@@ -4,6 +4,7 @@ mod auth;
 mod sysctl;
 mod service;
 mod pkg;
+mod users;
 
 use pkg::Catalog;
 use slint::{Model, ModelRc, VecModel, SharedString, Weak};
@@ -50,6 +51,7 @@ fn main() -> Result<(), slint::PlatformError> {
         ui.set_active_page(page.clone());
         match page.as_str() {
             "packages" => load_page_data_async(ui.as_weak()),
+            "users" => load_users_and_groups(ui.as_weak()),
             other => load_sysctl_or_service(ui.as_weak(), other),
         }
     });
@@ -185,6 +187,218 @@ fn main() -> Result<(), slint::PlatformError> {
         });
     });
 
+    // ── User / Group callbacks ────────────────────────────────────────────────
+
+    // Populate form for a new user
+    let ui_handle = ui.as_weak();
+    ui.on_new_user_form(move || {
+        if let Some(ui) = ui_handle.upgrade() {
+            let uid = users::next_uid();
+            ui.set_uf_name("".into());
+            ui.set_uf_comment("".into());
+            ui.set_uf_uid(uid.into());
+            ui.set_uf_primary_group("".into());
+            ui.set_uf_extra_groups("".into());
+            ui.set_uf_home("".into());
+            ui.set_uf_shell("/bin/sh".into());
+            ui.set_uf_password("".into());
+            ui.set_uf_create_home(true);
+            ui.set_uf_locked(false);
+            ui.set_user_form_is_edit(false);
+            ui.set_show_user_form(true);
+            ui.set_users_status("".into());
+        }
+    });
+
+    // Populate form for editing an existing user
+    let ui_handle = ui.as_weak();
+    ui.on_edit_user_form(move |name| {
+        let name_str = name.to_string();
+        if let Some(info) = users::get_user(&name_str) {
+            if let Some(ui) = ui_handle.upgrade() {
+                ui.set_uf_name(info.name.into());
+                ui.set_uf_comment(info.comment.into());
+                ui.set_uf_uid(info.uid.to_string().into());
+                ui.set_uf_primary_group(info.primary_group.into());
+                ui.set_uf_extra_groups(info.extra_groups.into());
+                ui.set_uf_home(info.home.into());
+                ui.set_uf_shell(info.shell.into());
+                ui.set_uf_password("".into());
+                ui.set_uf_create_home(false);
+                ui.set_uf_locked(info.locked);
+                ui.set_user_form_is_edit(true);
+                ui.set_show_user_form(true);
+                ui.set_users_status("".into());
+            }
+        }
+    });
+
+    // Save user (add or edit)
+    let ui_handle = ui.as_weak();
+    ui.on_save_user(move || {
+        let Some(ui) = ui_handle.upgrade() else { return };
+        let is_edit = ui.get_user_form_is_edit();
+        let name = ui.get_uf_name().to_string();
+        let comment = ui.get_uf_comment().to_string();
+        let uid_str = ui.get_uf_uid().to_string();
+        let primary_group = ui.get_uf_primary_group().to_string();
+        let extra_groups = ui.get_uf_extra_groups().to_string();
+        let home = ui.get_uf_home().to_string();
+        let shell = ui.get_uf_shell().to_string();
+        let password = ui.get_uf_password().to_string();
+        let create_home = ui.get_uf_create_home();
+        let locked = ui.get_uf_locked();
+        let ui_weak = ui_handle.clone();
+
+        std::thread::spawn(move || {
+            let result = if is_edit {
+                users::edit_user(users::EditUserParams {
+                    name,
+                    comment,
+                    primary_group,
+                    extra_groups,
+                    home,
+                    shell,
+                    password,
+                    locked,
+                })
+            } else {
+                users::add_user(users::AddUserParams {
+                    name,
+                    comment,
+                    uid: uid_str,
+                    primary_group,
+                    extra_groups,
+                    home,
+                    shell,
+                    password,
+                    create_home,
+                    locked,
+                })
+            };
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = ui_weak.upgrade() {
+                    match result {
+                        Ok(()) => {
+                            ui.set_show_user_form(false);
+                            ui.set_users_status("OK".into());
+                            load_users_and_groups(ui.as_weak());
+                        }
+                        Err(e) => {
+                            ui.set_users_status(e.into());
+                        }
+                    }
+                }
+            });
+        });
+    });
+
+    // Delete user (confirmed)
+    let ui_handle = ui.as_weak();
+    ui.on_do_delete_user(move |name| {
+        let name_str = name.to_string();
+        let ui_weak = ui_handle.clone();
+        std::thread::spawn(move || {
+            let result = users::delete_user(&name_str, false);
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = ui_weak.upgrade() {
+                    match result {
+                        Ok(()) => {
+                            ui.set_users_status("OK".into());
+                            load_users_and_groups(ui.as_weak());
+                        }
+                        Err(e) => ui.set_users_status(e.into()),
+                    }
+                }
+            });
+        });
+    });
+
+    // Populate form for a new group
+    let ui_handle = ui.as_weak();
+    ui.on_new_group_form(move || {
+        if let Some(ui) = ui_handle.upgrade() {
+            let gid = users::next_gid();
+            ui.set_gf_name("".into());
+            ui.set_gf_gid(gid.into());
+            ui.set_gf_members("".into());
+            ui.set_group_form_is_edit(false);
+            ui.set_show_group_form(true);
+            ui.set_users_status("".into());
+        }
+    });
+
+    // Populate form for editing an existing group
+    let ui_handle = ui.as_weak();
+    ui.on_edit_group_form(move |name| {
+        let name_str = name.to_string();
+        let found = users::list_groups()
+            .into_iter()
+            .find(|g| g.name == name_str);
+        if let Some(g) = found {
+            if let Some(ui) = ui_handle.upgrade() {
+                ui.set_gf_name(g.name.into());
+                ui.set_gf_gid(g.gid.to_string().into());
+                ui.set_gf_members(g.members.into());
+                ui.set_group_form_is_edit(true);
+                ui.set_show_group_form(true);
+                ui.set_users_status("".into());
+            }
+        }
+    });
+
+    // Save group (add or edit)
+    let ui_handle = ui.as_weak();
+    ui.on_save_group(move || {
+        let Some(ui) = ui_handle.upgrade() else { return };
+        let is_edit = ui.get_group_form_is_edit();
+        let name = ui.get_gf_name().to_string();
+        let gid = ui.get_gf_gid().to_string();
+        let members = ui.get_gf_members().to_string();
+        let ui_weak = ui_handle.clone();
+
+        std::thread::spawn(move || {
+            let result = if is_edit {
+                users::edit_group(users::EditGroupParams { name, members })
+            } else {
+                users::add_group(users::AddGroupParams { name, gid, members })
+            };
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = ui_weak.upgrade() {
+                    match result {
+                        Ok(()) => {
+                            ui.set_show_group_form(false);
+                            ui.set_users_status("OK".into());
+                            load_users_and_groups(ui.as_weak());
+                        }
+                        Err(e) => ui.set_users_status(e.into()),
+                    }
+                }
+            });
+        });
+    });
+
+    // Delete group (confirmed)
+    let ui_handle = ui.as_weak();
+    ui.on_do_delete_group(move |name| {
+        let name_str = name.to_string();
+        let ui_weak = ui_handle.clone();
+        std::thread::spawn(move || {
+            let result = users::delete_group(&name_str);
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = ui_weak.upgrade() {
+                    match result {
+                        Ok(()) => {
+                            ui.set_users_status("OK".into());
+                            load_users_and_groups(ui.as_weak());
+                        }
+                        Err(e) => ui.set_users_status(e.into()),
+                    }
+                }
+            });
+        });
+    });
+
     ui.run()
 }
 
@@ -255,6 +469,41 @@ fn load_page_data_async(ui_weak: Weak<AppWindow>) {
             if let Some(ui) = ui_weak.upgrade() {
                 ui.set_packages(ModelRc::from(Rc::new(VecModel::from(entries))));
                 ui.set_marked_count(0);
+                ui.set_loading(false);
+            }
+        });
+    });
+}
+
+fn load_users_and_groups(ui_weak: Weak<AppWindow>) {
+    if let Some(ui) = ui_weak.upgrade() { ui.set_loading(true); }
+    std::thread::spawn(move || {
+        let user_entries: Vec<UserEntry> = users::list_users()
+            .into_iter()
+            .map(|u| UserEntry {
+                name: SharedString::from(u.name),
+                uid: u.uid as i32,
+                primary_group: SharedString::from(u.primary_group),
+                home: SharedString::from(u.home),
+                shell: SharedString::from(u.shell),
+                comment: SharedString::from(u.comment),
+                locked: u.locked,
+            })
+            .collect();
+
+        let group_entries: Vec<GroupEntry> = users::list_groups()
+            .into_iter()
+            .map(|g| GroupEntry {
+                name: SharedString::from(g.name),
+                gid: g.gid as i32,
+                members: SharedString::from(g.members),
+            })
+            .collect();
+
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(ui) = ui_weak.upgrade() {
+                ui.set_users(ModelRc::from(Rc::new(VecModel::from(user_entries))));
+                ui.set_groups(ModelRc::from(Rc::new(VecModel::from(group_entries))));
                 ui.set_loading(false);
             }
         });
