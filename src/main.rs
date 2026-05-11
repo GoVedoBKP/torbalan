@@ -10,6 +10,7 @@ mod hardening;
 use pkg::Catalog;
 use slint::{Model, ModelRc, VecModel, SharedString, Weak};
 use std::rc::Rc;
+use std::sync::Arc;
 
 fn main() -> Result<(), slint::PlatformError> {
     let ui = AppWindow::new()?;
@@ -97,12 +98,16 @@ fn main() -> Result<(), slint::PlatformError> {
     let ui_handle = ui.as_weak();
     let catalog_ref = catalog.clone();
     ui.on_install_package(move |name| {
-        if let Some(ui) = ui_handle.upgrade() { ui.set_loading(true); }
+        if let Some(ui) = ui_handle.upgrade() {
+            ui.set_pkg_log("".into());
+            ui.set_loading(true);
+        }
         let ui_weak = ui_handle.clone();
         let name_str = name.to_string();
         let cache = catalog_ref.clone();
         std::thread::spawn(move || {
-            pkg::install(&name_str);
+            let cb = make_log_cb(ui_weak.clone());
+            pkg::install_with_output(&name_str, cb);
             reload_packages(ui_weak, cache);
         });
     });
@@ -111,12 +116,16 @@ fn main() -> Result<(), slint::PlatformError> {
     let ui_handle = ui.as_weak();
     let catalog_ref = catalog.clone();
     ui.on_remove_package(move |name| {
-        if let Some(ui) = ui_handle.upgrade() { ui.set_loading(true); }
+        if let Some(ui) = ui_handle.upgrade() {
+            ui.set_pkg_log("".into());
+            ui.set_loading(true);
+        }
         let ui_weak = ui_handle.clone();
         let name_str = name.to_string();
         let cache = catalog_ref.clone();
         std::thread::spawn(move || {
-            pkg::remove(&name_str);
+            let cb = make_log_cb(ui_weak.clone());
+            pkg::remove_with_output(&name_str, cb);
             reload_packages(ui_weak, cache);
         });
     });
@@ -133,11 +142,16 @@ fn main() -> Result<(), slint::PlatformError> {
             .map(|e| e.name.to_string())
             .collect();
         if names.is_empty() { return; }
+        ui.set_pkg_log("".into());
         ui.set_loading(true);
         let ui_weak = ui_handle.clone();
         let cache = catalog_ref.clone();
         std::thread::spawn(move || {
-            for name in &names { pkg::remove(name); }
+            let cb = make_log_cb(ui_weak.clone());
+            for name in &names {
+                append_log(&cb, &format!("=== Removing {} ===", name));
+                pkg::remove_with_output(name, cb.clone());
+            }
             reload_packages(ui_weak, cache);
         });
     });
@@ -154,11 +168,16 @@ fn main() -> Result<(), slint::PlatformError> {
             .map(|e| e.name.to_string())
             .collect();
         if names.is_empty() { return; }
+        ui.set_pkg_log("".into());
         ui.set_loading(true);
         let ui_weak = ui_handle.clone();
         let cache = catalog_ref.clone();
         std::thread::spawn(move || {
-            for name in &names { pkg::install(name); }
+            let cb = make_log_cb(ui_weak.clone());
+            for name in &names {
+                append_log(&cb, &format!("=== Installing {} ===", name));
+                pkg::install_with_output(name, cb.clone());
+            }
             reload_packages(ui_weak, cache);
         });
     });
@@ -455,6 +474,25 @@ fn reload_packages(ui_weak: Weak<AppWindow>, cache: Catalog) {
             ui.set_loading(false);
         }
     });
+}
+
+/// Create a callback that appends each line to the `pkg-log` UI property.
+fn make_log_cb(ui_weak: Weak<AppWindow>) -> pkg::OutputCb {
+    Arc::new(move |line: String| {
+        let uw = ui_weak.clone();
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(ui) = uw.upgrade() {
+                let mut log = ui.get_pkg_log().to_string();
+                log.push_str(&line);
+                log.push('\n');
+                ui.set_pkg_log(log.into());
+            }
+        });
+    })
+}
+
+fn append_log(cb: &pkg::OutputCb, msg: &str) {
+    cb(msg.to_string());
 }
 
 fn group_into_slint_entries(packages: Vec<pkg::PackageEntry>) -> Vec<PackageEntry> {

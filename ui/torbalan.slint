@@ -78,6 +78,7 @@ export component AppWindow inherits Window {
     in property <int> marked-count: 0;
     in property <bool> catalog-ready: false;
     in property <int> catalog-total: 0;
+    in-out property <string> pkg-log: "";
 
     in property <[SysctlEntry]> sysctls: [];
     in property <[ServiceEntry]> services: [];
@@ -412,6 +413,45 @@ export component AppWindow inherits Window {
                             Button {
                                 text: "Remove Selected";
                                 clicked => { root.remove-marked() }
+                            }
+                        }
+                    }
+
+                    // pkg output log (visible when there is content)
+                    if (root.pkg-log != "") : VerticalBox {
+                        spacing: 4px;
+                        HorizontalBox {
+                            spacing: 8px;
+                            Text {
+                                text: "Output";
+                                font-weight: 900;
+                                font-size: 13px;
+                                color: #333333;
+                                vertical-alignment: center;
+                            }
+                            Rectangle { horizontal-stretch: 1; }
+                            Button {
+                                text: "Clear";
+                                clicked => { root.pkg-log = ""; }
+                            }
+                        }
+                        pkg-log-scroll := ScrollView {
+                            height: 220px;
+                            // Bind viewport-y to always show the bottom of the log
+                            viewport-y: -(pkg-log-scroll.viewport-height - pkg-log-scroll.visible-height);
+                            Rectangle {
+                                background: #1a1a1a;
+                                border-radius: 6px;
+                                HorizontalBox {
+                                    padding: 10px;
+                                    Text {
+                                        text: root.pkg-log;
+                                        font-family: "Liberation Mono";
+                                        font-size: 12px;
+                                        color: #dddddd;
+                                        wrap: word-wrap;
+                                    }
+                                }
                             }
                         }
                     }

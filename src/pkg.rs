@@ -1,11 +1,14 @@
 use std::{
     collections::HashMap,
-    process::Command,
+    io::{BufRead, BufReader},
+    process::{Command, Stdio},
     sync::{Arc, Mutex},
 };
 
 const PKG: &str = "/usr/local/sbin/pkg";
 const MAX_DISPLAY: usize = 1000;
+
+pub type OutputCb = Arc<dyn Fn(String) + Send + Sync>;
 
 #[derive(Clone, Debug)]
 pub struct PackageEntry {
@@ -164,4 +167,42 @@ pub fn remove(name: &str) -> bool {
         .status()
         .map(|s| s.success())
         .unwrap_or(false)
+}
+
+/// Run `pkg install -y <name>`, streaming every output line through `cb`.
+pub fn install_with_output(name: &str, cb: OutputCb) -> bool {
+    run_with_output(&["install", "-y", name], cb)
+}
+
+/// Run `pkg delete -y <name>`, streaming every output line through `cb`.
+pub fn remove_with_output(name: &str, cb: OutputCb) -> bool {
+    run_with_output(&["delete", "-y", name], cb)
+}
+
+/// Spawn a pkg command with piped stdout+stderr; call `cb` for each line.
+fn run_with_output(args: &[&str], cb: OutputCb) -> bool {
+    let mut child = match Command::new(PKG)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => { cb(format!("[error] {e}")); return false; }
+    };
+
+    let stdout = BufReader::new(child.stdout.take().expect("stdout piped"));
+    let stderr = BufReader::new(child.stderr.take().expect("stderr piped"));
+    let cb2 = cb.clone();
+
+    let t_out = std::thread::spawn(move || {
+        for line in stdout.lines().flatten() { cb(line); }
+    });
+    let t_err = std::thread::spawn(move || {
+        for line in stderr.lines().flatten() { cb2(line); }
+    });
+
+    t_out.join().ok();
+    t_err.join().ok();
+    child.wait().map(|s| s.success()).unwrap_or(false)
 }
