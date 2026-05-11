@@ -551,6 +551,7 @@ fn load_users_and_groups(ui_weak: Weak<AppWindow>) {
                 shell: SharedString::from(u.shell),
                 comment: SharedString::from(u.comment),
                 locked: u.locked,
+                is_system: u.is_system,
             })
             .collect();
 
@@ -560,6 +561,7 @@ fn load_users_and_groups(ui_weak: Weak<AppWindow>) {
                 name: SharedString::from(g.name),
                 gid: g.gid as i32,
                 members: SharedString::from(g.members),
+                is_system: g.is_system,
             })
             .collect();
 

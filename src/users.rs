@@ -16,6 +16,7 @@ pub struct UserInfo {
     pub shell: String,
     pub comment: String,
     pub locked: bool,
+    pub is_system: bool,     // UID < 1000
 }
 
 #[derive(Clone, Debug)]
@@ -23,6 +24,7 @@ pub struct GroupInfo {
     pub name: String,
     pub gid: u32,
     pub members: String, // comma-separated member usernames
+    pub is_system: bool, // GID < 1000
 }
 
 pub struct AddUserParams {
@@ -145,6 +147,7 @@ fn parse_user_line(line: &str, locked: &HashSet<String>) -> Option<UserInfo> {
         shell,
         comment,
         locked: is_locked,
+        is_system: uid < 1000,
     })
 }
 
@@ -189,6 +192,7 @@ pub fn list_groups() -> Vec<GroupInfo> {
                 name: parts[0].to_string(),
                 gid: parts[2].parse().unwrap_or(0),
                 members: parts[3].trim().to_string(),
+                is_system: parts[2].parse::<u32>().unwrap_or(0) < 1000,
             })
         })
         .collect()

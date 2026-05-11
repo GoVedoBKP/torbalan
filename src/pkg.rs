@@ -153,22 +153,6 @@ fn query_installed() -> Vec<PackageEntry> {
     packages
 }
 
-pub fn install(name: &str) -> bool {
-    Command::new(PKG)
-        .args(["install", "-y", name])
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-}
-
-pub fn remove(name: &str) -> bool {
-    Command::new(PKG)
-        .args(["delete", "-y", name])
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-}
-
 /// Run `pkg install -y <name>`, streaming every output line through `cb`.
 pub fn install_with_output(name: &str, cb: OutputCb) -> bool {
     run_with_output(&["install", "-y", name], cb)

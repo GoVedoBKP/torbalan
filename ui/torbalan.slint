@@ -32,12 +32,14 @@ export struct UserEntry {
     shell: string,
     comment: string,
     locked: bool,
+    is-system: bool,
 }
 
 export struct GroupEntry {
     name: string,
     gid: int,
     members: string,
+    is-system: bool,
 }
 
 export component AppWindow inherits Window {
@@ -95,6 +97,8 @@ export component AppWindow inherits Window {
     in-out property <string> users-status: "";
     in-out property <string> confirm-delete-user: "";
     in-out property <string> confirm-delete-group: "";
+    in-out property <bool> hide-system-users: true;
+    in-out property <bool> hide-system-groups: true;
 
     // User form fields
     in-out property <string> uf-name: "";
@@ -485,6 +489,19 @@ export component AppWindow inherits Window {
                             }
                         }
                         Rectangle { horizontal-stretch: 1; }
+                        CheckBox {
+                            text: "Hide system";
+                            checked: root.users-sub-page == "users"
+                                ? root.hide-system-users
+                                : root.hide-system-groups;
+                            toggled => {
+                                if (root.users-sub-page == "users") {
+                                    root.hide-system-users = self.checked;
+                                } else {
+                                    root.hide-system-groups = self.checked;
+                                }
+                            }
+                        }
                         if (!root.show-user-form && !root.show-group-form) : Button {
                             text: root.users-sub-page == "users" ? "+ Add User" : "+ Add Group";
                             primary: true;
@@ -581,11 +598,12 @@ export component AppWindow inherits Window {
                                 padding: 4px;
                                 spacing: 4px;
                                 for entry in root.users : Rectangle {
-                                    height: 54px;
-                                    background: #ffffff;
+                                    height: (!entry.is-system || !root.hide-system-users) ? 54px : 0px;
+                                    clip: true;
+                                    background: entry.is-system ? #f0f0f0 : #ffffff;
                                     border-radius: 6px;
                                     border-width: 1px;
-                                    border-color: #e0e0e0;
+                                    border-color: entry.is-system ? #cccccc : #e0e0e0;
                                     HorizontalBox {
                                         padding: 8px; spacing: 8px;
                                         Text {
@@ -593,7 +611,7 @@ export component AppWindow inherits Window {
                                             width: 180px;
                                             font-weight: 700;
                                             font-size: 15px;
-                                            color: #000000;
+                                            color: entry.is-system ? #666666 : #000000;
                                             vertical-alignment: center;
                                             overflow: elide;
                                         }
@@ -630,7 +648,17 @@ export component AppWindow inherits Window {
                                             color: #444444;
                                             overflow: elide;
                                         }
-                                        Rectangle {
+                                        if (entry.is-system) : Rectangle {
+                                            width: 60px; height: 20px;
+                                            background: #888888;
+                                            border-radius: 10px;
+                                            Text {
+                                                text: "SYSTEM";
+                                                color: #ffffff; font-size: 10px; font-weight: 900;
+                                                horizontal-alignment: center; vertical-alignment: center;
+                                            }
+                                        }
+                                        if (!entry.is-system) : Rectangle {
                                             width: 76px; height: 24px;
                                             background: entry.locked ? #cc2222 : #2e8b57;
                                             border-radius: 12px;
@@ -794,11 +822,12 @@ export component AppWindow inherits Window {
                                 padding: 4px;
                                 spacing: 4px;
                                 for entry in root.groups : Rectangle {
-                                    height: 48px;
-                                    background: #ffffff;
+                                    height: (!entry.is-system || !root.hide-system-groups) ? 48px : 0px;
+                                    clip: true;
+                                    background: entry.is-system ? #f0f0f0 : #ffffff;
                                     border-radius: 6px;
                                     border-width: 1px;
-                                    border-color: #e0e0e0;
+                                    border-color: entry.is-system ? #cccccc : #e0e0e0;
                                     HorizontalBox {
                                         padding: 8px; spacing: 8px;
                                         Text {
@@ -806,7 +835,7 @@ export component AppWindow inherits Window {
                                             width: 200px;
                                             font-weight: 700;
                                             font-size: 15px;
-                                            color: #000000;
+                                            color: entry.is-system ? #666666 : #000000;
                                             vertical-alignment: center;
                                             overflow: elide;
                                         }
@@ -825,6 +854,16 @@ export component AppWindow inherits Window {
                                             font-size: 13px;
                                             color: #444444;
                                             overflow: elide;
+                                        }
+                                        if (entry.is-system) : Rectangle {
+                                            width: 60px; height: 20px;
+                                            background: #888888;
+                                            border-radius: 10px;
+                                            Text {
+                                                text: "SYSTEM";
+                                                color: #ffffff; font-size: 10px; font-weight: 900;
+                                                horizontal-alignment: center; vertical-alignment: center;
+                                            }
                                         }
                                         Button {
                                             text: "Edit"; width: 70px;
